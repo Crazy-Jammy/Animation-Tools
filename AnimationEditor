@@ -1,0 +1,774 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using UnityEditor;
+using UnityEngine;
+
+public class AnimationEditor : EditorWindow {
+
+	public AnimationClip[] clips;
+	public string[] clipsname;
+	public int selectedclip = 0;
+	AnimationClip currentClip;
+	AnimationEvent[] events;
+	AnimationEvent currentEvent;
+	Dictionary<int,List<int>> eventIndex;
+	Animator animator;
+	int ClipFrameCount;
+
+	[MenuItem("Tools/AnimationEditor")]
+	public static void ShowWindow()
+	{
+		if (Selection.activeObject == null || !(Selection.activeObject is GameObject))
+		{
+			Debug.Log("No selected");
+		}
+
+		var animator = (Selection.activeObject as GameObject).GetComponent<Animator>();
+		if (animator == null)
+			return;
+
+		//Animator animator;
+		var clips = animator.runtimeAnimatorController.animationClips;
+		for (int i = 0; i < clips.Length; i++)
+		{
+			for (int j = 0; j < clips[i].events.Length; j++)
+			{
+				//Debug.Log($"functionName({clips[i].events[j].functionName}), time({clips[i].events[j].time}), objectRef({clips[i].events[j].objectReferenceParameter})");
+			}
+		}
+		var ae = EditorWindow.GetWindow<AnimationEditor>();
+		ae.animator = animator;
+		ae.clips = clips;
+		ae.clipsname = new List<AnimationClip>(clips).ConvertAll<string>((clip) => clip.name).ToArray();
+		ae.selectedclip = -1;			
+		ae.Show();
+		//var clip = ani;
+		//for (int i = 0; i < clip.events.Length; i++)
+		//{
+		//	Debug.Log($"functionName({clip.events[i].functionName}), time({clip.events[i].time}), objectRef({clip.events[i].objectReferenceParameter})");
+		//}		
+		//Debug.Log(clips.Length);
+		//Debug.Log(animator.GetCurrentAnimatorClipInfoCount(0));
+	}
+
+	int mToolsBar = 0;
+	Vector2 eventListpos;
+	Vector2 eventListParampos;
+	public void OnGUI()
+	{
+		GUILayout.BeginVertical();
+		{
+			GUILayout.Space(5);
+			GUILayout.BeginHorizontal();
+			{
+				GUILayout.Label("选择动画:", GUILayout.Width(100));
+				EditorGUI.BeginChangeCheck();
+				selectedclip = EditorGUILayout.Popup(selectedclip, clipsname, GUILayout.Width(200));
+				if (EditorGUI.EndChangeCheck())
+				{
+					if (selectedclip >= 0 && selectedclip < clipsname.Length)
+					{
+						currentClip = clips[selectedclip];
+						events = currentClip.events;
+						int frameCount = Mathf.RoundToInt(currentClip.frameRate * currentClip.length);
+						ClipFrameCount = frameCount;
+						eventIndex = new Dictionary<int, List<int>>();
+						for (int i = 0; i < frameCount; i++)
+						{
+							eventIndex[i] = new List<int>();
+						}
+						for (int i = 0; i < events.Length; i++)
+						{
+							var index = Mathf.RoundToInt(events[i].time * currentClip.frameRate);
+							eventIndex[index].Add(i);
+						}
+						if (curframe >= ClipFrameCount)
+						{
+							curframe = 0;
+						}
+						SetFramePos();
+						UpdateEventFun();
+						curFrameEventIndex = -1;
+						Debug.Log("Select Changed");
+					}
+				}
+			}
+			GUILayout.EndHorizontal();
+			GUILayout.Space(5);
+			Layout_DrawSeparator(Color.white);
+			var ooc = GUI.color;
+			string[] toolsStr = new string[] { "事件编辑", "特效编辑", "声音编辑" };
+			EditorGUI.BeginChangeCheck();
+			mToolsBar = GUILayout.Toolbar(mToolsBar, toolsStr);
+			if(EditorGUI.EndChangeCheck())
+			{
+				curFrameEventIndex = -1;
+			}
+			GUI.color = ooc;
+			Layout_DrawSeparator(Color.white);
+
+			GUI_AniFrame();
+
+			Layout_DrawSeparator(Color.white);
+
+			if(mToolsBar == 0)  // 事件编辑
+			{
+				if (currentClip != null)
+				{
+					GUILayout.BeginHorizontal();
+					{
+						eventListpos = GUILayout.BeginScrollView(eventListpos, GUILayout.Width(350));
+						{
+							GUI_EventList();
+						}
+						GUILayout.EndScrollView();
+						Layout_DrawSeparatorV(Color.white);
+
+						eventListParampos = GUILayout.BeginScrollView(eventListParampos, GUILayout.Width(300));
+						{
+							GUI_EventListParam();
+						}
+						GUILayout.EndScrollView();
+						Layout_DrawSeparatorV(Color.white);
+					}
+					GUILayout.EndHorizontal();
+				}
+			}
+			else if(mToolsBar == 1) // 特效编辑
+			{
+				if (currentClip != null)
+				{
+					GUILayout.BeginHorizontal();
+					{
+						eventListpos = GUILayout.BeginScrollView(eventListpos, GUILayout.Width(350));
+						{
+							GUI_EffectList();
+						}
+						GUILayout.EndScrollView();
+						Layout_DrawSeparatorV(Color.white);
+
+						eventListParampos = GUILayout.BeginScrollView(eventListParampos, GUILayout.Width(300));
+						{
+							GUI_EffectListParam();
+						}
+						GUILayout.EndScrollView();
+						Layout_DrawSeparatorV(Color.white);
+					}
+					GUILayout.EndHorizontal();
+				}
+			}
+			else if(mToolsBar == 2) // 声音编辑
+			{
+				if (currentClip != null)
+				{
+					GUILayout.BeginHorizontal();
+					{
+						eventListpos = GUILayout.BeginScrollView(eventListpos, GUILayout.Width(350));
+						{
+							GUI_AudioList();
+						}
+						GUILayout.EndScrollView();
+						Layout_DrawSeparatorV(Color.white);
+
+						eventListParampos = GUILayout.BeginScrollView(eventListParampos, GUILayout.Width(300));
+						{
+							GUI_AudioListParam();
+						}
+						GUILayout.EndScrollView();
+						Layout_DrawSeparatorV(Color.white);
+					}
+					GUILayout.EndHorizontal();
+				}
+			}
+
+		}
+		GUILayout.EndVertical();
+	}
+
+	#region event list 
+	int curFrameEventIndex = -1;
+	void GUI_EventList()
+	{
+		GUILayout.Label("Draw Fun List");
+		for (int i = 0; i < curFrameEvents.Count; i++)
+		{
+			if (i >= events.Length || curFrameEvents[i] >= events.Length) continue;
+
+			if (!AniEvents.normalEvents.ContainsKey(events[curFrameEvents[i]].functionName)) continue;
+
+			GUILayout.BeginHorizontal();
+			{
+				if(GUILayout.Button(events[curFrameEvents[i]].functionName))
+				{
+					curFrameEventIndex = curFrameEvents[i];
+				}
+				//if (i != 0)
+				if(false)
+				{
+					if(GUILayout.Button("上", GUILayout.Width(30)))
+					{
+						AnimationEvent e = events[curFrameEvents[i]];
+						events[curFrameEvents[i]] = events[curFrameEvents[i] - 1];
+						events[curFrameEvents[i] - 1] = e;
+						Save();
+						Repaint();
+						break;
+					}
+				}
+				else
+				{
+					GUILayout.Space(30);
+				}
+				//if (i != curFrameEvents.Count-1)
+				if(false)
+				{
+					if(GUILayout.Button("下", GUILayout.Width(30)))
+					{
+						AnimationEvent e = events[curFrameEvents[i]];
+						events[curFrameEvents[i]] = events[curFrameEvents[i] + 1];
+						events[curFrameEvents[i] + 1] = e;
+						Save();
+						Repaint();
+						break;
+					}
+				}
+				else
+				{
+					GUILayout.Space(30);
+				}
+				if (GUILayout.Button("X", GUILayout.Width(30)))
+				{
+					List<AnimationEvent> aevs = new List<AnimationEvent>(events);
+					aevs.RemoveAt(curFrameEvents[i]);
+					events = aevs.ToArray();
+					Save();
+					Repaint();
+					break;
+				}
+			}
+			GUILayout.EndHorizontal();
+		}
+		if(GUILayout.Button("Add Function"))
+		{
+			Window_PickAny.ShowAny(AniEvents.normalEvents.Keys, (s) =>
+			{
+				if (string.IsNullOrEmpty(s)) return;
+
+				List<AnimationEvent> aevs = new List<AnimationEvent>(events);
+				AnimationEvent aevent = new AnimationEvent();
+				aevent.functionName = s;
+				aevent.time = curframe * 1.0f / currentClip.frameRate;
+				aevs.Add(aevent);
+				events = aevs.ToArray();
+				Save();
+				Repaint();
+			});
+		}
+	}
+
+	private void OnDestroy()
+	{
+		if (AnimationMode.InAnimationMode())
+		{
+			AnimationMode.StopAnimationMode();
+		}
+	}
+
+	void Save()
+	{
+		if (selectedclip < 0 || selectedclip >= clips.Length) return;
+		AnimationUtility.SetAnimationEvents(clips[selectedclip], events);
+		Debug.Log("Save");
+		ReLoad();
+	}
+
+	void ReLoad()
+	{
+		var clips = animator.runtimeAnimatorController.animationClips;
+		for (int i = 0; i < clips.Length; i++)
+		{
+			for (int j = 0; j < clips[i].events.Length; j++)
+			{
+				//Debug.Log($"functionName({clips[i].events[j].functionName}), time({clips[i].events[j].time}), objectRef({clips[i].events[j].objectReferenceParameter})");
+			}
+		}
+		this.clips = clips;
+		this.clipsname = new List<AnimationClip>(clips).ConvertAll<string>((clip) => clip.name).ToArray();
+				
+		eventIndex = new Dictionary<int, List<int>>();
+		for (int i = 0; i < ClipFrameCount; i++)
+		{
+			eventIndex[i] = new List<int>();
+		}
+		for (int i = 0; i < events.Length; i++)
+		{
+			var index = Mathf.RoundToInt(events[i].time * currentClip.frameRate);
+			eventIndex[index].Add(i);
+		}
+		UpdateEventFun();
+	}
+
+	void GUI_EventListParam()
+	{
+		GUILayout.Label("Draw Fun Param ");
+		if(curFrameEventIndex >= 0 && curFrameEventIndex <= events.Length - 1)
+		{
+			if (AniEvents.normalEvents.ContainsKey(events[curFrameEventIndex].functionName))
+			{
+				//events[curFrameEventIndex].functionName = EditorGUILayout.DelayedTextField("functionName : ", events[curFrameEventIndex].functionName);
+				if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].type == 0)
+				{
+					if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].DrawGUI != null)
+					{
+						AniEvents.normalEvents[events[curFrameEventIndex].functionName].DrawGUI(null);
+					}
+				}
+				if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].type == 1)
+				{
+					if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].DrawGUI == null)
+					{
+						events[curFrameEventIndex].floatParameter = EditorGUILayout.DelayedFloatField("floatParam : ", events[curFrameEventIndex].floatParameter);
+					}
+					else
+					{
+						events[curFrameEventIndex].floatParameter = (float)AniEvents.normalEvents[events[curFrameEventIndex].functionName].DrawGUI(events[curFrameEventIndex].floatParameter);
+					}
+				}
+				if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].type == 2)
+				{
+					if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].DrawGUI == null)
+					{
+						events[curFrameEventIndex].intParameter = EditorGUILayout.DelayedIntField("intParam : ", events[curFrameEventIndex].intParameter);
+					}
+					else
+					{
+						events[curFrameEventIndex].intParameter = (int)AniEvents.normalEvents[events[curFrameEventIndex].functionName].DrawGUI(events[curFrameEventIndex].intParameter);
+					}
+				}
+				if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].type == 3)
+				{
+					if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].DrawGUI == null)
+					{
+						events[curFrameEventIndex].stringParameter = EditorGUILayout.DelayedTextField("stringParam : ", events[curFrameEventIndex].stringParameter);
+					}
+					else
+					{
+						events[curFrameEventIndex].stringParameter = (string)AniEvents.normalEvents[events[curFrameEventIndex].functionName].DrawGUI(events[curFrameEventIndex].stringParameter);
+					}
+				}
+				if (AniEvents.normalEvents[events[curFrameEventIndex].functionName].type != 0)
+				{
+					GUILayout.Label("Tips: 输入完成后，请按回车确认，否则可能无效！");
+				}
+				GUILayout.Space(50);
+
+				if (GUILayout.Button("Save"))
+				{
+					Save();
+				}
+			}
+		}
+	}
+	
+	int curframe = 0;
+	Vector2 anipos;
+	private void GUI_AniFrame()
+	{
+		if (currentClip == null) return;
+		GUILayout.Label("Animationclip :( " + currentClip.name + " / " + curframe +" / " + (currentClip.frameRate*currentClip.length) + " )");
+		EditorGUI.BeginChangeCheck();
+		GUILayout.Toggle(AnimationMode.InAnimationMode(), "Preview");
+		if (EditorGUI.EndChangeCheck())
+			ToggleAnimationMode();
+		int nf = (int)GUILayout.HorizontalScrollbar(curframe, 1, 0, ClipFrameCount);
+		anipos = EditorGUILayout.BeginScrollView(anipos, true, false, GUILayout.Height(230));
+		GUILayout.BeginHorizontal();
+		for (int i = 0; i < ClipFrameCount; i++)
+		{
+			var obc = GUI.backgroundColor;
+			if (curframe == i)
+			{
+				GUI.backgroundColor = Color.green;
+			}
+			GUILayout.BeginVertical(GUILayout.Width(1));
+
+			var oc = GUI.color;
+						
+			GUILayout.Label(i.ToString());
+			if (GUILayout.Button(i.ToString()))
+			{
+				nf = i;
+			}
+			
+			GUI.color = oc;
+			
+			string d_txt = "○";
+			if(eventIndex[i].Count != 0)
+			{
+				bool hasEvent = false;
+				if(mToolsBar == 0)
+				{
+					for (int j = 0; j < eventIndex[i].Count; j++)
+					{
+						if (AniEvents.normalEvents.ContainsKey(events[eventIndex[i][j]].functionName))
+							hasEvent = true;
+					}
+				}
+				else if (mToolsBar == 1)
+				{
+					for (int j = 0; j < eventIndex[i].Count; j++)
+					{
+						if (AniEvents.effectEvents.Contains(events[eventIndex[i][j]].functionName))
+							hasEvent = true;
+					}
+				}
+				else if (mToolsBar == 2)
+				{
+					for (int j = 0; j < eventIndex[i].Count; j++)
+					{
+						if (AniEvents.audioEvents.Contains(events[eventIndex[i][j]].functionName))
+							hasEvent = true;
+					}
+				}
+				// 这一帧有事件
+				if (hasEvent)
+				{
+					GUI.color = new Color(1.0f, 0.4f, 0.6f, 1.0f);
+					d_txt = "●";
+				}
+			}					
+			if (GUILayout.Button(d_txt))
+			{
+				nf = i;
+				if(d_txt.Equals("●"))
+				{
+					//Debug.Log(events[eventIndex[i]].functionName);
+				}
+			}
+			GUILayout.EndVertical();
+			GUI.color = oc;
+			GUI.backgroundColor = obc;
+
+
+		}
+
+		if (curframe != nf)
+		{
+			curframe = nf;
+			SetFramePos();
+			UpdateEventFun();
+			curFrameEventIndex = -1;
+		}
+
+		GUILayout.EndHorizontal();
+		GUILayout.EndScrollView();
+	}
+	List<int> curFrameEvents = new List<int>();
+	void UpdateEventFun()
+	{
+		curFrameEvents = new List<int>();
+		curFrameEvents = eventIndex[curframe];
+		return;
+		for (int i = 0; i < events.Length; i++)
+		{
+			if (Mathf.RoundToInt(events[i].time * currentClip.frameRate) == curframe)
+			{
+				curFrameEvents.Add(i);
+			}
+		}
+	}
+	#endregion
+
+	#region Effect List
+	void GUI_EffectList()
+	{
+		GUILayout.Label("Draw Effect List");
+		for (int i = 0; i < curFrameEvents.Count; i++)
+		{
+			if (i >= events.Length) continue;
+
+			if (!AniEvents.effectEvents.Contains(events[curFrameEvents[i]].functionName)) continue;
+
+			GUILayout.BeginHorizontal();
+			{
+				if (GUILayout.Button(events[curFrameEvents[i]].functionName + "_" + i))
+				{
+					curFrameEventIndex = curFrameEvents[i];
+					aniEffectParam = JsonUtility.FromJson<AniEffectParam>(events[curFrameEventIndex].stringParameter);
+					if (aniEffectParam == null)
+						aniEffectParam = new AniEffectParam();
+				}
+				if (GUILayout.Button("X", GUILayout.Width(30)))
+				{
+					List<AnimationEvent> aevs = new List<AnimationEvent>(events);
+					aevs.RemoveAt(curFrameEvents[i]);
+					events = aevs.ToArray();
+					Save();
+					Repaint();
+					break;
+				}
+			}
+			GUILayout.EndHorizontal();
+		}
+		if (GUILayout.Button("Add Function"))
+		{
+			List<AnimationEvent> aevs = new List<AnimationEvent>(events);
+			AnimationEvent aevent = new AnimationEvent();
+			aevent.functionName = AniEvents.effectEvents[0];
+			aevent.time = curframe * 1.0f / currentClip.frameRate;
+			aevs.Add(aevent);
+			events = aevs.ToArray();
+			Save();
+			Repaint();
+		}
+	}
+	AniEffectParam aniEffectParam = new AniEffectParam();
+	void GUI_EffectListParam()
+	{
+		GUILayout.Label("Draw Effect Param");
+		if (curFrameEventIndex >= 0 && curFrameEventIndex <= events.Length - 1)
+		{			
+			GUILayout.BeginVertical();
+			{
+				events[curFrameEventIndex].intParameter = EditorGUILayout.DelayedIntField("特效Id : ", events[curFrameEventIndex].intParameter);				
+			}
+			GUILayout.EndVertical();			
+
+			//GUILayout.Label("Tips: 输入完成后，请按回车确认，否则可能无效！");
+			GUILayout.Space(50);
+
+			if (GUILayout.Button("Save"))
+			{
+				Save();
+			}
+
+		}
+	}
+	#endregion
+
+	#region Audio List
+	void GUI_AudioList()
+	{
+		GUILayout.Label("Draw Audio List");
+		for (int i = 0; i < curFrameEvents.Count; i++)
+		{
+			if (i >= events.Length) continue;
+			
+			if (!AniEvents.audioEvents.Contains(events[curFrameEvents[i]].functionName)) continue;
+
+			GUILayout.BeginHorizontal();
+			{
+				if (GUILayout.Button(events[curFrameEvents[i]].functionName + "_" + i))
+				{
+					curFrameEventIndex = curFrameEvents[i];
+					aniAudioParam = JsonUtility.FromJson<AniAudioParam>(events[curFrameEventIndex].stringParameter);
+					if (aniAudioParam == null)
+						aniAudioParam = new AniAudioParam();
+				}
+				if (GUILayout.Button("X", GUILayout.Width(30)))
+				{
+					List<AnimationEvent> aevs = new List<AnimationEvent>(events);
+					aevs.RemoveAt(curFrameEvents[i]);
+					events = aevs.ToArray();
+					Save();
+					Repaint();
+					break;
+				}
+			}
+			GUILayout.EndHorizontal();
+		}
+		if (GUILayout.Button("Add Function"))
+		{
+			List<AnimationEvent> aevs = new List<AnimationEvent>(events);
+			AnimationEvent aevent = new AnimationEvent();
+			aevent.functionName = AniEvents.audioEvents[0];
+			aevent.time = curframe * 1.0f / currentClip.frameRate;
+			aevs.Add(aevent);
+			events = aevs.ToArray();
+			Save();
+			Repaint();
+		}
+	}
+	AniAudioParam aniAudioParam = new AniAudioParam();
+	void GUI_AudioListParam()
+	{
+		GUILayout.Label("Draw Effect Param");
+		if (curFrameEventIndex >= 0 && curFrameEventIndex <= events.Length - 1)
+		{
+			GUILayout.BeginVertical();
+			{
+				events[curFrameEventIndex].intParameter = EditorGUILayout.DelayedIntField("音效Id : ", events[curFrameEventIndex].intParameter);
+			}
+			GUILayout.EndVertical();
+
+			GUILayout.Space(50);
+
+			if (GUILayout.Button("Save"))
+			{
+				Save();
+			}
+
+		}
+	}
+	#endregion
+
+	#region Set Frame Pos
+	void SetFramePos()
+	{
+		if (currentClip != null)
+		{
+			if (AnimationMode.InAnimationMode())
+			{
+				AnimationMode.BeginSampling();
+				AnimationMode.SampleAnimationClip(animator.gameObject, currentClip, curframe * 1.0f / currentClip.frameRate);				
+				Debug.Log("SetFramePos : " + curframe * 1.0f / currentClip.frameRate);
+				AnimationMode.EndSampling();
+				SceneView.RepaintAll();
+			}
+		}
+	}
+	void ToggleAnimationMode()
+	{
+		if (AnimationMode.InAnimationMode())
+		{
+			AnimationMode.StopAnimationMode();
+		}
+		else
+		{
+			AnimationMode.StartAnimationMode();
+		}
+	}
+	#endregion
+
+	public static void Layout_DrawSeparator(Color color, float height = 4f)
+	{
+
+		Rect rect = GUILayoutUtility.GetLastRect();
+		GUI.color = color;
+		GUI.DrawTexture(new Rect(rect.xMin, rect.yMax, Screen.width, height), EditorGUIUtility.whiteTexture);
+		GUI.color = Color.white;
+		GUILayout.Space(height);
+	}
+	public static void Layout_DrawSeparatorV(Color color, float width = 4f)
+	{
+
+		Rect rect = GUILayoutUtility.GetLastRect();
+		GUI.color = color;
+		GUI.DrawTexture(new Rect(rect.xMax, rect.yMin, width, rect.height), EditorGUIUtility.whiteTexture);
+		GUI.color = Color.white;
+		GUILayout.Space(width);
+	}
+}
+
+public class EventCustomGUI
+{
+	public delegate T CallBack1<T>(T t);
+	/// <summary>
+	/// 0:无参 1 float 2 int 3 string
+	/// </summary>
+	public int type;
+	/// <summary>
+	/// 自定义GUI界面
+	/// </summary>
+	public CallBack1<object> DrawGUI;
+}
+
+public static class AniEvents
+{
+	public static Dictionary<string, EventCustomGUI> normalEvents = new Dictionary<string, EventCustomGUI>() {
+		{ "DisableMarkers", new EventCustomGUI(){ type = 0 } },
+		{ "EnableMarkers", new EventCustomGUI(){ type = 0 } },
+		{ "ClearTargets", new EventCustomGUI(){ type = 0 } },
+		{ "SetSkillId", new EventCustomGUI(){ type = 2, DrawGUI=(data)=>{
+			var v = (int)data;
+			v = EditorGUILayout.DelayedIntField("设置技能Id", v);
+			return v;
+		} } },
+		{ "SetSelfDunZhen", new EventCustomGUI(){ type = 2, DrawGUI = (data)=>{
+			var bigdata = (int)data;
+			if(bigdata < 0)
+			{
+				bigdata = 0;
+			}
+			int ret1, ret2, ret3, ret4;
+			ret1 = bigdata / 100000 % 10;
+			ret2 = bigdata / 1000 % 100;
+			ret3 = bigdata / 100 % 10;
+			ret4 = bigdata % 100;
+			EditorGUILayout.LabelField("设置自身效果(单位0.1s)");
+			ret1 = EditorGUILayout.IntSlider("第一阶段持续时间(0-9)", ret1, 0, 9);
+			ret2 = EditorGUILayout.IntSlider("第一阶段动画速率(0-50)", ret2, 0, 50);
+			ret3 = EditorGUILayout.IntSlider("第二阶段持续时间(0-9)", ret3, 0, 9);
+			ret4 = EditorGUILayout.IntSlider("第二阶段动画速率(0-50)", ret4, 0, 50);
+			return ret1 * 100000 + ret2 * 1000 + ret3 * 100 + ret4;
+		} } },
+		{ "SetTargetDunZhen", new EventCustomGUI(){ type = 2,DrawGUI = (data)=>{
+			var bigdata = (int)data;
+			if(bigdata < 0)
+			{
+				bigdata = 0;
+			}
+			int ret1, ret2, ret3, ret4;
+			ret1 = bigdata / 100000 % 10;
+			ret2 = bigdata / 1000 % 100;
+			ret3 = bigdata / 100 % 10;
+			ret4 = bigdata % 100;
+			EditorGUILayout.LabelField("设置对方效果(单位0.1s)");
+			ret1 = EditorGUILayout.IntSlider("第一阶段持续时间(0-9)", ret1, 0, 9);
+			ret2 = EditorGUILayout.IntSlider("第一阶段动画速率(0-50)", ret2, 0, 50);
+			ret3 = EditorGUILayout.IntSlider("第二阶段持续时间(0-9)", ret3, 0, 9);
+			ret4 = EditorGUILayout.IntSlider("第二阶段动画速率(0-50)", ret4, 0, 50);
+			return ret1 * 100000 + ret2 * 1000 + ret3 * 100 + ret4;
+		} } },
+		{ "SetEndure", new EventCustomGUI(){ type = 1, DrawGUI = (data)=>{
+			float time = (float)data;
+			time = EditorGUILayout.FloatField("持续时间", time);
+			return time;
+		} } },
+		{ "SetBeatable", new EventCustomGUI(){ type = 0, DrawGUI=(data)=>{
+			EditorGUILayout.LabelField("设置为可击中状态");
+			return null;
+		} } },
+		{ "SetUnbeatable", new EventCustomGUI(){ type = 0, DrawGUI=(data)=>{
+			EditorGUILayout.LabelField("设置为不可击中状态(无敌)");
+			return null;
+		} } },
+		{ "SetAttackDir", new EventCustomGUI(){ type = 2, DrawGUI = (data)=>{
+			var d = (AttackDirType)data;
+			var e = EditorGUILayout.EnumPopup(d);
+			return e;
+		} } },
+		{ "SetActionForce", new EventCustomGUI(){type = 2, DrawGUI = (data)=>{
+			int ret1, ret2, ret3, ret4;
+			float fet1, fet2, fet3;
+			int bigdata = (int)data;
+			ret1 = bigdata / 10000 % 100 % 21;
+			ret2 = bigdata / 100 % 100 % 21;
+			ret3 = bigdata % 100 % 21;
+			ret4 = bigdata / 1000000 % 1000;
+			fet1 = (ret1 - 10) * 0.1f;
+			fet2 = (ret2 - 10) * 0.1f;
+			fet3 = (ret3 - 10) * 0.1f;
+			EditorGUILayout.LabelField("设置动作攻击到敌方时，设置力的方向:");
+			EditorGUILayout.LabelField("left(-1,0,0) right(1,0,0)");
+			EditorGUILayout.LabelField("forward(0,0,1) back(0,0,-1)");
+			fet1 = EditorGUILayout.Slider("Vector3.X", fet1, -1, 1);
+			fet2 = EditorGUILayout.Slider("Vector3.Y", 0, -1, 1);
+			fet3 = EditorGUILayout.Slider("Vector3.Z", fet3, -1, 1);
+			EditorGUILayout.LabelField("设置力的大小(X1)");
+			ret4 = EditorGUILayout.IntSlider("Force", ret4, 0, 999);
+			EditorGUILayout.LabelField("设置结果：" + (ret4 * 1000000 + (int)((fet3 + 1) * 10) + (int)((fet2 + 1) * 10) * 100 + (int)((fet1 + 1) * 10) * 10000));
+			return ret4 * 1000000 + Mathf.RoundToInt((fet3 + 1) * 10) + Mathf.RoundToInt((fet2 + 1) * 10) * 100 + Mathf.RoundToInt((fet1 + 1) * 10) * 10000;
+		} } },
+		{ "TestFunc", new EventCustomGUI(){ type = 2 } },
+	};
+
+	public static List<string> effectEvents = new List<string>() {
+		"SetFXEffect"
+	};
+
+	public static List<string> audioEvents = new List<string>() {
+		"SetSFXEffect"
+	};
+}
